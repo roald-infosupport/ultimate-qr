@@ -1,3 +1,5 @@
+import { stripTrackingParams } from './trackingParams'
+
 export type ContentType = 'Link' | 'Text'
 
 // Matches a bare domain/hostname (example.com), optionally followed by a path/query/fragment,
@@ -24,14 +26,18 @@ export function computeEncodedContent(
   trimmedInput: string,
   contentType: ContentType,
   schemeAutoAddEnabled: boolean,
+  trackingToggles: Record<string, boolean>,
 ): string {
+  let content = trimmedInput
+
   if (
     schemeAutoAddEnabled &&
     contentType === 'Link' &&
-    trimmedInput !== '' &&
-    !hasScheme(trimmedInput)
+    content !== '' &&
+    !hasScheme(content)
   ) {
-    return `https://${trimmedInput}`
+    content = `https://${content}`
   }
-  return trimmedInput
+
+  return stripTrackingParams(content, contentType, trackingToggles)
 }

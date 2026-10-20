@@ -6,38 +6,114 @@ import {
   trimInput,
   type ContentType,
 } from './lib/qrContent'
+import {
+  defaultTrackingToggles,
+  groupByCategory,
+  TRACKING_PARAMETER_CATALOG,
+} from './lib/trackingParams'
+import { resolveLocalWrapper, resolveViaNetwork } from './lib/followLink'
 import './App.css'
 
 const DEBOUNCE_MS = 150
+const FOLLOW_LINK_FAILURE_MESSAGE =
+  "Couldn't verify this link's destination. It may be a shortener that blocks cross-origin checks, or the link may already be direct."
 
-function useDebouncedValue<T>(value: T, delayMs: number): T {
-  const [debounced, setDebounced] = useState(value)
+type FollowLinkOutcome =
+  | 'notAttempted'
+  | 'localWrapperResolved'
+  | 'networkResolved'
+  | 'failed'
 
-  useEffect(() => {
-    const timer = setTimeout(() => setDebounced(value), delayMs)
-    return () => clearTimeout(timer)
-  }, [value, delayMs])
-
-  return debounced
+interface FollowLinkState {
+  outcome: FollowLinkOutcome
+  failureMessage?: string
 }
 
 function isClickableLink(contentType: ContentType, content: string): boolean {
   return contentType === 'Link' && /^https?:\/\//i.test(content)
 }
 
+const TRACKING_PARAMETER_GROUPS = groupByCategory(TRACKING_PARAMETER_CATALOG)
+
 function App() {
   const [rawInput, setRawInput] = useState('')
-  const debouncedInput = useDebouncedValue(rawInput, DEBOUNCE_MS)
+  const [committedInput, setCommittedInput] = useState('')
   const [schemeAutoAddEnabled, setSchemeAutoAddEnabled] = useState(true)
+  const [trackingToggles, setTrackingToggles] = useState<
+    Record<string, boolean>
+  >(defaultTrackingToggles)
+  const [followLinkState, setFollowLinkState] = useState<FollowLinkState>({
+    outcome: 'notAttempted',
+  })
+  const [isResolvingFollowLink, setIsResolvingFollowLink] = useState(false)
 
-  const trimmedInput = trimInput(debouncedInput)
+  useEffect(() => {
+    const timer = setTimeout(() => setCommittedInput(rawInput), DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [rawInput])
+
+  function handleRawInputChange(value: string) {
+    setRawInput(value)
+    setFollowLinkState({ outcome: 'notAttempted' })
+  }
+
+  function applyResolvedInput(destination: string) {
+    setRawInput(destination)
+    setCommittedInput(destination)
+  }
+
+  function toggleTrackingParam(name: string) {
+    setTrackingToggles((current) => ({
+      ...current,
+      [name]: current[name] === false,
+    }))
+  }
+
+  const trimmedInput = trimInput(committedInput)
   const contentType = classify(trimmedInput)
   const encodedContent = computeEncodedContent(
     trimmedInput,
     contentType,
     schemeAutoAddEnabled,
+    trackingToggles,
   )
   const isEmpty = trimmedInput === ''
+
+  async function handleFollowLink() {
+    if (isResolvingFollowLink) return
+    setIsResolvingFollowLink(true)
+
+    try {
+      const localDestination = resolveLocalWrapper(encodedContent)
+      if (localDestination && classify(trimInput(localDestination)) === 'Link') {
+        applyResolvedInput(localDestination)
+        setFollowLinkState({ outcome: 'localWrapperResolved' })
+        return
+      }
+
+      const networkDestination = await resolveViaNetwork(encodedContent)
+      if (
+        networkDestination &&
+        classify(trimInput(networkDestination)) === 'Link'
+      ) {
+        applyResolvedInput(networkDestination)
+        setFollowLinkState({ outcome: 'networkResolved' })
+        return
+      }
+
+      setFollowLinkState({
+        outcome: 'failed',
+        failureMessage: FOLLOW_LINK_FAILURE_MESSAGE,
+      })
+    } catch {
+      setFollowLinkState({
+        outcome: 'failed',
+        failureMessage: FOLLOW_LINK_FAILURE_MESSAGE,
+      })
+    } finally {
+      setIsResolvingFollowLink(false)
+    }
+  }
 
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null)
   const [qrError, setQrError] = useState(false)
@@ -78,9 +154,10 @@ function App() {
         <input
           type="text"
           value={rawInput}
-          onChange={(event) => setRawInput(event.target.value)}
+          onChange={(event) => handleRawInputChange(event.target.value)}
           placeholder="https://example.com or any text"
           aria-label="Content to encode"
+          disabled={isResolvingFollowLink}
         />
         <label className="scheme-toggle">
           <input
@@ -91,6 +168,40 @@ function App() {
           Auto-add https://
         </label>
       </div>
+
+      <div className="tracking-params">
+        <h2 className="tracking-params-heading">Tracking cleanup</h2>
+        {TRACKING_PARAMETER_GROUPS.map((group) => (
+          <fieldset className="tracking-group" key={group.category}>
+            <legend>{group.category}</legend>
+            {group.params.map((param) => (
+              <label className="tracking-toggle" key={param.name}>
+                <input
+                  type="checkbox"
+                  checked={trackingToggles[param.name] !== false}
+                  onChange={() => toggleTrackingParam(param.name)}
+                />
+                {param.name}
+              </label>
+            ))}
+          </fieldset>
+        ))}
+      </div>
+
+      {contentType === 'Link' && (
+        <div className="follow-link">
+          <button
+            type="button"
+            onClick={handleFollowLink}
+            disabled={isResolvingFollowLink}
+          >
+            {isResolvingFollowLink ? 'Checking…' : 'Follow Link'}
+          </button>
+          {followLinkState.outcome === 'failed' && (
+            <p className="follow-link-error">{followLinkState.failureMessage}</p>
+          )}
+        </div>
+      )}
 
       <div className="preview">
         {isEmpty ? (
