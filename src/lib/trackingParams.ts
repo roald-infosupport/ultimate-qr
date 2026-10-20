@@ -60,15 +60,11 @@ const TRACKING_PARAM_NAMES = new Set(
   TRACKING_PARAMETER_CATALOG.map((rule) => rule.name),
 )
 
-export function stripTrackingParams(
+function parseQueryString(
   content: string,
-  contentType: ContentType,
-  toggles: Record<string, boolean>,
-): string {
-  if (contentType !== 'Link') return content
-
+): { base: string; params: URLSearchParams; hash: string } | null {
   const queryIndex = content.indexOf('?')
-  if (queryIndex === -1) return content
+  if (queryIndex === -1) return null
 
   const hashIndex = content.indexOf('#', queryIndex)
   const base = content.slice(0, queryIndex)
@@ -78,7 +74,36 @@ export function stripTrackingParams(
       : content.slice(queryIndex + 1, hashIndex)
   const hash = hashIndex === -1 ? '' : content.slice(hashIndex)
 
-  const params = new URLSearchParams(query)
+  return { base, params: new URLSearchParams(query), hash }
+}
+
+export function getPresentTrackingParamNames(
+  content: string,
+  contentType: ContentType,
+): Set<string> {
+  if (contentType !== 'Link') return new Set()
+
+  const parsed = parseQueryString(content)
+  if (!parsed) return new Set()
+
+  const present = new Set<string>()
+  for (const name of parsed.params.keys()) {
+    if (TRACKING_PARAM_NAMES.has(name)) present.add(name)
+  }
+  return present
+}
+
+export function stripTrackingParams(
+  content: string,
+  contentType: ContentType,
+  toggles: Record<string, boolean>,
+): string {
+  if (contentType !== 'Link') return content
+
+  const parsed = parseQueryString(content)
+  if (!parsed) return content
+  const { base, params, hash } = parsed
+
   for (const name of new Set(params.keys())) {
     if (TRACKING_PARAM_NAMES.has(name) && toggles[name] !== false) {
       params.delete(name)

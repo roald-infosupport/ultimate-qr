@@ -8,6 +8,7 @@ import {
 } from './lib/qrContent'
 import {
   defaultTrackingToggles,
+  getPresentTrackingParamNames,
   groupByCategory,
   TRACKING_PARAMETER_CATALOG,
 } from './lib/trackingParams'
@@ -320,6 +321,19 @@ function App() {
   const isEmpty = !hasUploadedFile && trimmedInput === ''
   const capacityStatus = computeCapacityStatus(encodedContent, errorCorrectionLevel)
 
+  const presentTrackingParamNames = getPresentTrackingParamNames(
+    trimmedInput,
+    typedContentType,
+  )
+  const visibleTrackingParameterGroups = TRACKING_PARAMETER_GROUPS.map(
+    (group) => ({
+      category: group.category,
+      params: group.params.filter((param) =>
+        presentTrackingParamNames.has(param.name),
+      ),
+    }),
+  ).filter((group) => group.params.length > 0)
+
   async function handleFollowLink() {
     if (isResolvingFollowLink) return
     setIsResolvingFollowLink(true)
@@ -523,24 +537,26 @@ function App() {
         )}
       </div>
 
-      <div className="tracking-params">
-        <h2 className="tracking-params-heading">Tracking cleanup</h2>
-        {TRACKING_PARAMETER_GROUPS.map((group) => (
-          <fieldset className="tracking-group" key={group.category}>
-            <legend>{group.category}</legend>
-            {group.params.map((param) => (
-              <label className="tracking-toggle" key={param.name}>
-                <input
-                  type="checkbox"
-                  checked={trackingToggles[param.name] !== false}
-                  onChange={() => toggleTrackingParam(param.name)}
-                />
-                {param.name}
-              </label>
-            ))}
-          </fieldset>
-        ))}
-      </div>
+      {visibleTrackingParameterGroups.length > 0 && (
+        <div className="tracking-params">
+          <h2 className="tracking-params-heading">Tracking cleanup</h2>
+          {visibleTrackingParameterGroups.map((group) => (
+            <fieldset className="tracking-group" key={group.category}>
+              <legend>{group.category}</legend>
+              {group.params.map((param) => (
+                <label className="tracking-toggle" key={param.name}>
+                  <input
+                    type="checkbox"
+                    checked={trackingToggles[param.name] !== false}
+                    onChange={() => toggleTrackingParam(param.name)}
+                  />
+                  {param.name}
+                </label>
+              ))}
+            </fieldset>
+          ))}
+        </div>
+      )}
 
       {contentType === 'Link' && (
         <div className="follow-link">
