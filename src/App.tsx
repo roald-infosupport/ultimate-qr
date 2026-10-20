@@ -67,12 +67,14 @@ function App() {
   >(null)
   const [isDraggingFile, setIsDraggingFile] = useState(false)
   const [isProcessingUpload, setIsProcessingUpload] = useState(false)
+  const [inputWasTruncated, setInputWasTruncated] = useState(false)
 
   useEffect(() => {
-    const timer = setTimeout(
-      () => setCommittedInput(truncateToCapacity(rawInput, 'M')),
-      DEBOUNCE_MS,
-    )
+    const timer = setTimeout(() => {
+      const truncated = truncateToCapacity(rawInput, 'M')
+      setCommittedInput(truncated)
+      setInputWasTruncated(truncated.length < rawInput.length)
+    }, DEBOUNCE_MS)
     return () => clearTimeout(timer)
   }, [rawInput])
 
@@ -94,16 +96,10 @@ function App() {
 
     const sizeCheck = checkRawFileSize(file)
     if (!sizeCheck.ok) {
-      setUploadedFile(null)
       setUploadMessageKind('error')
       setUploadMessage(sizeCheck.message)
       return
     }
-
-    // Uploading a file replaces any typed input (mutually exclusive sources).
-    setRawInput('')
-    setCommittedInput('')
-    setFollowLinkState({ outcome: 'notAttempted' })
 
     setIsProcessingUpload(true)
     try {
@@ -111,6 +107,13 @@ function App() {
       const result = processUploadedFile(file.name, bytes, 'M')
 
       if (result.outcome === 'accepted') {
+        // Uploading a file replaces any typed input (mutually exclusive
+        // sources) — but only once the upload actually succeeds, so a
+        // rejected upload never wipes out previously-typed or previously-
+        // uploaded content.
+        setRawInput('')
+        setCommittedInput('')
+        setFollowLinkState({ outcome: 'notAttempted' })
         setUploadedFile(result.file)
         if (result.minificationApplied) {
           setUploadMessageKind('info')
@@ -120,7 +123,6 @@ function App() {
           setUploadMessage(null)
         }
       } else {
-        setUploadedFile(null)
         setUploadMessageKind('error')
         setUploadMessage(result.message)
       }
@@ -406,7 +408,7 @@ function App() {
                 uploadedFile.extension === 'ico' || uploadedFile.extension === 'svg' ? (
                   <img
                     className="file-thumbnail"
-                    src={toDataUri(uploadedFile.mimeType, uploadedFile.finalBytes)}
+                    src={encodedContent}
                     alt={`Preview of uploaded ${uploadedFile.extension} file`}
                   />
                 ) : (
@@ -421,11 +423,18 @@ function App() {
               ) : (
                 <span className="content-text">{encodedContent}</span>
               )}
-              {capacityStatus.status === 'warning' && (
+              {!hasUploadedFile && inputWasTruncated ? (
                 <span className="capacity-warning">
-                  Approaching QR capacity ({capacityStatus.capacityUsedBytes} /{' '}
-                  {capacityStatus.capacityMaxBytes} bytes)
+                  Input was truncated to fit the absolute QR capacity (
+                  {capacityStatus.capacityMaxBytes} bytes).
                 </span>
+              ) : (
+                capacityStatus.status === 'warning' && (
+                  <span className="capacity-warning">
+                    Approaching QR capacity ({capacityStatus.capacityUsedBytes} /{' '}
+                    {capacityStatus.capacityMaxBytes} bytes)
+                  </span>
+                )
               )}
             </div>
           </>
