@@ -169,4 +169,11 @@ describe('clampLogoPosition', () => {
     expect(result.x).toBeGreaterThanOrEqual(0)
     expect(result.y).toBeLessThanOrEqual(100)
   })
+
+  it('a position valid at a small size pulls further inward once re-clamped at a larger size (motivates re-clamping the stored position on resize, not just on drag)', () => {
+    const smallSizeClamp = clampLogoPosition(5, 5, 5)
+    const largeSizeClamp = clampLogoPosition(smallSizeClamp.x, smallSizeClamp.y, MAX_LOGO_SIZE_PERCENT)
+    expect(largeSizeClamp.x).toBeGreaterThan(smallSizeClamp.x)
+    expect(largeSizeClamp.y).toBeGreaterThan(smallSizeClamp.y)
+  })
 })

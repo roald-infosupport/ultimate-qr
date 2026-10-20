@@ -1,4 +1,4 @@
-import { useEffect, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import QRCode from 'qrcode'
 import {
   classify,
@@ -100,6 +100,13 @@ function App() {
   const [inputWasTruncated, setInputWasTruncated] = useState(false)
 
   const [errorCorrectionLevel, setErrorCorrectionLevel] = useState<ErrorCorrectionLevel>('M')
+  // Mirrors errorCorrectionLevel for reads from async continuations (e.g.
+  // handleLogoSelected after its await) where the closed-over state value
+  // can be stale relative to what's actually committed.
+  const errorCorrectionLevelRef = useRef(errorCorrectionLevel)
+  useEffect(() => {
+    errorCorrectionLevelRef.current = errorCorrectionLevel
+  }, [errorCorrectionLevel])
 
   const [logoConfig, setLogoConfig] = useState<LogoConfiguration>(EMPTY_LOGO_CONFIG)
   const [logoMessage, setLogoMessage] = useState<string | null>(null)
@@ -127,6 +134,27 @@ function App() {
     )
     return () => clearTimeout(timer)
   }, [rawLogoSizePercent])
+
+  // Keeps logoConfig.sizePercent (the value the drag handler clamps against)
+  // in sync with committedLogoSizePercent (the value actually rendered), and
+  // re-clamps the stored position whenever the committed size changes. Without
+  // this, growing the logo after dragging it near an edge at a smaller size
+  // left the backing plate positioned for the old, smaller half-width — so
+  // the enlarged plate could clip against the QR frame's edge.
+  useEffect(() => {
+    setLogoConfig((current) => {
+      if (!current.isActive || current.sizePercent === committedLogoSizePercent) return current
+      return {
+        ...current,
+        sizePercent: committedLogoSizePercent,
+        positionPercent: clampLogoPosition(
+          current.positionPercent.x,
+          current.positionPercent.y,
+          committedLogoSizePercent,
+        ),
+      }
+    })
+  }, [committedLogoSizePercent])
 
   function handleRawInputChange(value: string) {
     setRawInput(value)
@@ -203,11 +231,14 @@ function App() {
       const result = processUploadedLogo(file.name, bytes)
 
       if (result.outcome === 'accepted') {
-        const alreadyActive = logoConfig.isActive
         setLogoMessage(null)
         setRawLogoSizePercent(DEFAULT_LOGO_SIZE_PERCENT)
         setCommittedLogoSizePercent(DEFAULT_LOGO_SIZE_PERCENT)
-        setLogoConfig({
+        // Functional updater: reads the logo's *current* committed state
+        // rather than the `logoConfig` closed over before the `await` above,
+        // which could otherwise be stale if the logo was removed (or
+        // replaced again) while this upload was in flight.
+        setLogoConfig((current) => ({
           isActive: true,
           fileName: file.name,
           extension: result.extension,
@@ -216,12 +247,14 @@ function App() {
           sizePercent: DEFAULT_LOGO_SIZE_PERCENT,
           backingPlateColor: DEFAULT_BACKING_PLATE_COLOR,
           positionPercent: DEFAULT_LOGO_POSITION,
-          errorCorrectionLevelBeforeLogo: alreadyActive
-            ? logoConfig.errorCorrectionLevelBeforeLogo
-            : errorCorrectionLevel,
-          ecLevelAutoSet: alreadyActive ? logoConfig.ecLevelAutoSet : true,
-        })
-        if (!alreadyActive) setErrorCorrectionLevel('Q')
+          errorCorrectionLevelBeforeLogo: current.isActive
+            ? current.errorCorrectionLevelBeforeLogo
+            : errorCorrectionLevelRef.current,
+          ecLevelAutoSet: current.isActive ? current.ecLevelAutoSet : true,
+        }))
+        // Idempotent: if a logo was already active, the level is already
+        // 'Q' and this is a no-op; if not, this is the initial auto-bump.
+        setErrorCorrectionLevel('Q')
       } else {
         setLogoMessage(result.message)
       }
