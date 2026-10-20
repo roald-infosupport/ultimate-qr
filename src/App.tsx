@@ -12,6 +12,14 @@ import {
   TRACKING_PARAMETER_CATALOG,
 } from './lib/trackingParams'
 import { resolveLocalWrapper, resolveViaNetwork } from './lib/followLink'
+import { computeCapacityStatus, truncateToCapacity } from './lib/capacity'
+import {
+  checkRawFileSize,
+  processUploadedFile,
+  readFileBytes,
+  toDataUri,
+  type UploadedFile,
+} from './lib/fileUpload'
 import './App.css'
 
 const DEBOUNCE_MS = 150
@@ -47,19 +55,73 @@ function App() {
   })
   const [isResolvingFollowLink, setIsResolvingFollowLink] = useState(false)
 
+  const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
+  const [uploadMessage, setUploadMessage] = useState<string | null>(null)
+  const [uploadMessageKind, setUploadMessageKind] = useState<
+    'error' | 'info' | null
+  >(null)
+  const [isDraggingFile, setIsDraggingFile] = useState(false)
+  const [isProcessingUpload, setIsProcessingUpload] = useState(false)
+
   useEffect(() => {
-    const timer = setTimeout(() => setCommittedInput(rawInput), DEBOUNCE_MS)
+    const timer = setTimeout(
+      () => setCommittedInput(truncateToCapacity(rawInput, 'M')),
+      DEBOUNCE_MS,
+    )
     return () => clearTimeout(timer)
   }, [rawInput])
 
   function handleRawInputChange(value: string) {
     setRawInput(value)
     setFollowLinkState({ outcome: 'notAttempted' })
+    setUploadedFile(null)
+    setUploadMessage(null)
+    setUploadMessageKind(null)
   }
 
   function applyResolvedInput(destination: string) {
     setRawInput(destination)
     setCommittedInput(destination)
+  }
+
+  async function handleFileSelected(file: File) {
+    if (isProcessingUpload) return
+
+    const sizeCheck = checkRawFileSize(file)
+    if (!sizeCheck.ok) {
+      setUploadedFile(null)
+      setUploadMessageKind('error')
+      setUploadMessage(sizeCheck.message)
+      return
+    }
+
+    // Uploading a file replaces any typed input (mutually exclusive sources).
+    setRawInput('')
+    setCommittedInput('')
+    setFollowLinkState({ outcome: 'notAttempted' })
+
+    setIsProcessingUpload(true)
+    try {
+      const bytes = await readFileBytes(file)
+      const result = processUploadedFile(file.name, bytes, 'M')
+
+      if (result.outcome === 'accepted') {
+        setUploadedFile(result.file)
+        if (result.minificationApplied) {
+          setUploadMessageKind('info')
+          setUploadMessage('File was minified to fit QR capacity.')
+        } else {
+          setUploadMessageKind(null)
+          setUploadMessage(null)
+        }
+      } else {
+        setUploadedFile(null)
+        setUploadMessageKind('error')
+        setUploadMessage(result.message)
+      }
+    } finally {
+      setIsProcessingUpload(false)
+    }
   }
 
   function toggleTrackingParam(name: string) {
@@ -69,15 +131,21 @@ function App() {
     }))
   }
 
+  const hasUploadedFile = uploadedFile !== null
   const trimmedInput = trimInput(committedInput)
-  const contentType = classify(trimmedInput)
-  const encodedContent = computeEncodedContent(
+  const typedContentType = classify(trimmedInput)
+  const typedEncodedContent = computeEncodedContent(
     trimmedInput,
-    contentType,
+    typedContentType,
     schemeAutoAddEnabled,
     trackingToggles,
   )
-  const isEmpty = trimmedInput === ''
+  const contentType: ContentType = hasUploadedFile ? 'File' : typedContentType
+  const encodedContent = hasUploadedFile
+    ? toDataUri(uploadedFile.mimeType, uploadedFile.finalBytes)
+    : typedEncodedContent
+  const isEmpty = !hasUploadedFile && trimmedInput === ''
+  const capacityStatus = computeCapacityStatus(encodedContent, 'M')
 
   async function handleFollowLink() {
     if (isResolvingFollowLink) return
@@ -148,7 +216,7 @@ function App() {
   return (
     <section id="center">
       <h1>QR Maker</h1>
-      <p>Paste a link or type some text to get an instant QR code.</p>
+      <p>Paste a link, type some text, or upload a file to get an instant QR code.</p>
 
       <div className="input-row">
         <input
@@ -167,6 +235,39 @@ function App() {
           />
           Auto-add https://
         </label>
+      </div>
+
+      <div
+        className={`upload-row${isDraggingFile ? ' upload-row--dragging' : ''}`}
+        onDragOver={(event) => {
+          event.preventDefault()
+          setIsDraggingFile(true)
+        }}
+        onDragLeave={() => setIsDraggingFile(false)}
+        onDrop={(event) => {
+          event.preventDefault()
+          setIsDraggingFile(false)
+          const file = event.dataTransfer.files[0]
+          if (file) handleFileSelected(file)
+        }}
+      >
+        <input
+          type="file"
+          accept=".ics,.ico,.svg,.vcf"
+          aria-label="Upload a file to encode"
+          disabled={isProcessingUpload}
+          onChange={(event) => {
+            const file = event.target.files?.[0]
+            if (file) handleFileSelected(file)
+            event.target.value = ''
+          }}
+        />
+        <p className="upload-hint">or drag and drop a .ics, .ico, .svg, or .vcf file</p>
+        {uploadMessage && (
+          <p className={uploadMessageKind === 'error' ? 'upload-error' : 'upload-info'}>
+            {uploadMessage}
+          </p>
+        )}
       </div>
 
       <div className="tracking-params">
@@ -213,12 +314,33 @@ function App() {
             {qrDataUrl && <img src={qrDataUrl} alt="Generated QR code" width={220} height={220} />}
             <div className="meta">
               <span className="content-type">{contentType}</span>
-              {isClickableLink(contentType, encodedContent) ? (
+              {contentType === 'File' && uploadedFile && (
+                <span className="file-type">.{uploadedFile.extension}</span>
+              )}
+              {contentType === 'File' && uploadedFile ? (
+                uploadedFile.extension === 'ico' || uploadedFile.extension === 'svg' ? (
+                  <img
+                    className="file-thumbnail"
+                    src={toDataUri(uploadedFile.mimeType, uploadedFile.finalBytes)}
+                    alt={`Preview of uploaded ${uploadedFile.extension} file`}
+                  />
+                ) : (
+                  <pre className="content-text file-text-preview">
+                    {new TextDecoder().decode(uploadedFile.finalBytes)}
+                  </pre>
+                )
+              ) : isClickableLink(contentType, encodedContent) ? (
                 <a href={encodedContent} target="_blank" rel="noopener noreferrer">
                   {encodedContent}
                 </a>
               ) : (
                 <span className="content-text">{encodedContent}</span>
+              )}
+              {capacityStatus.status === 'warning' && (
+                <span className="capacity-warning">
+                  Approaching QR capacity ({capacityStatus.capacityUsedBytes} /{' '}
+                  {capacityStatus.capacityMaxBytes} bytes)
+                </span>
               )}
             </div>
           </>

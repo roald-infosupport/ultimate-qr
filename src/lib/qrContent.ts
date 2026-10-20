@@ -1,6 +1,8 @@
 import { stripTrackingParams } from './trackingParams'
 
-export type ContentType = 'Link' | 'Text'
+// 'File' is set directly by the file-upload path in App.tsx — it is never
+// derived by classify(), which only ever distinguishes typed Link/Text input.
+export type ContentType = 'Link' | 'Text' | 'File'
 
 // Matches a bare domain/hostname (example.com), optionally followed by a path/query/fragment,
 // with or without a leading scheme (https://, www.).
