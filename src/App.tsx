@@ -7,9 +7,8 @@ import {
   type ContentType,
 } from './lib/qrContent'
 import {
-  defaultTrackingToggles,
-  groupByCategory,
-  TRACKING_PARAMETER_CATALOG,
+  buildPresentParameterGroups,
+  resolveToggleState,
 } from './lib/trackingParams'
 import { resolveLocalWrapper, resolveViaNetwork } from './lib/followLink'
 import {
@@ -76,15 +75,13 @@ function isClickableLink(contentType: ContentType, content: string): boolean {
   return contentType === 'Link' && /^https?:\/\//i.test(content)
 }
 
-const TRACKING_PARAMETER_GROUPS = groupByCategory(TRACKING_PARAMETER_CATALOG)
-
 function App() {
   const [rawInput, setRawInput] = useState('')
   const [committedInput, setCommittedInput] = useState('')
   const [schemeAutoAddEnabled, setSchemeAutoAddEnabled] = useState(true)
   const [trackingToggles, setTrackingToggles] = useState<
     Record<string, boolean>
-  >(defaultTrackingToggles)
+  >({})
   const [followLinkState, setFollowLinkState] = useState<FollowLinkState>({
     outcome: 'notAttempted',
   })
@@ -212,7 +209,7 @@ function App() {
   function toggleTrackingParam(name: string) {
     setTrackingToggles((current) => ({
       ...current,
-      [name]: current[name] === false,
+      [name]: !resolveToggleState(name, current),
     }))
   }
 
@@ -319,6 +316,11 @@ function App() {
     : typedEncodedContent
   const isEmpty = !hasUploadedFile && trimmedInput === ''
   const capacityStatus = computeCapacityStatus(encodedContent, errorCorrectionLevel)
+
+  const visibleTrackingParameterGroups = buildPresentParameterGroups(
+    trimmedInput,
+    typedContentType,
+  )
 
   async function handleFollowLink() {
     if (isResolvingFollowLink) return
@@ -523,24 +525,26 @@ function App() {
         )}
       </div>
 
-      <div className="tracking-params">
-        <h2 className="tracking-params-heading">Tracking cleanup</h2>
-        {TRACKING_PARAMETER_GROUPS.map((group) => (
-          <fieldset className="tracking-group" key={group.category}>
-            <legend>{group.category}</legend>
-            {group.params.map((param) => (
-              <label className="tracking-toggle" key={param.name}>
-                <input
-                  type="checkbox"
-                  checked={trackingToggles[param.name] !== false}
-                  onChange={() => toggleTrackingParam(param.name)}
-                />
-                {param.name}
-              </label>
-            ))}
-          </fieldset>
-        ))}
-      </div>
+      {visibleTrackingParameterGroups.length > 0 && (
+        <div className="tracking-params">
+          <h2 className="tracking-params-heading">Tracking cleanup</h2>
+          {visibleTrackingParameterGroups.map((group) => (
+            <fieldset className="tracking-group" key={group.category}>
+              <legend>{group.category}</legend>
+              {group.params.map((param) => (
+                <label className="tracking-toggle" key={param.name}>
+                  <input
+                    type="checkbox"
+                    checked={resolveToggleState(param.name, trackingToggles)}
+                    onChange={() => toggleTrackingParam(param.name)}
+                  />
+                  {param.name}
+                </label>
+              ))}
+            </fieldset>
+          ))}
+        </div>
+      )}
 
       {contentType === 'Link' && (
         <div className="follow-link">
