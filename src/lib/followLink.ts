@@ -17,14 +17,18 @@ interface WrapperPattern {
   extract(url: URL): string | null
 }
 
-// Facebook's l.php often appends its own tracking params (e.g. `h`) inside the
-// already-percent-encoded `u` value rather than as a proper sibling query param,
-// so decoding `u` can yield "https://example.com/page&h=abc123" with no `?`.
-// Promote the first orphaned `&key=value` pair into a real query string so the
-// generic tracking-parameter stripper (re-run on this destination) can clean it.
+// Facebook's l.php appends its own `h` tracking param inside the already
+// percent-encoded `u` value rather than as a proper sibling query param, so
+// decoding `u` can yield "https://example.com/page&h=abc123" with no `?`.
+// Only that specific known suffix shape is promoted into a real query string
+// (not any bare `&`, which could otherwise corrupt a path that legitimately
+// contains an unencoded `&`) so the generic tracking-parameter stripper
+// (re-run on this destination) can clean it.
+const ORPHANED_FACEBOOK_H_PARAM = /&h=[^&]*$/
+
 function normalizeOrphanedQueryParams(url: string): string {
-  if (url.includes('?') || !url.includes('&')) return url
-  return url.replace('&', '?')
+  if (url.includes('?')) return url
+  return url.replace(ORPHANED_FACEBOOK_H_PARAM, (match) => `?${match.slice(1)}`)
 }
 
 const WRAPPER_PATTERNS: WrapperPattern[] = [

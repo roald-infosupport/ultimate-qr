@@ -157,6 +157,7 @@ function App() {
           onChange={(event) => handleRawInputChange(event.target.value)}
           placeholder="https://example.com or any text"
           aria-label="Content to encode"
+          disabled={isResolvingFollowLink}
         />
         <label className="scheme-toggle">
           <input
