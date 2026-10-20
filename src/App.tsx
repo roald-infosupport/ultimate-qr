@@ -1,121 +1,119 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
+import { useEffect, useState } from 'react'
+import QRCode from 'qrcode'
+import {
+  classify,
+  computeEncodedContent,
+  trimInput,
+  type ContentType,
+} from './lib/qrContent'
 import './App.css'
 
+const DEBOUNCE_MS = 150
+
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value)
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delayMs)
+    return () => clearTimeout(timer)
+  }, [value, delayMs])
+
+  return debounced
+}
+
+function isClickableLink(contentType: ContentType, content: string): boolean {
+  return contentType === 'Link' && /^https?:\/\//i.test(content)
+}
+
 function App() {
-  const [count, setCount] = useState(0)
+  const [rawInput, setRawInput] = useState('')
+  const debouncedInput = useDebouncedValue(rawInput, DEBOUNCE_MS)
+  const [schemeAutoAddEnabled, setSchemeAutoAddEnabled] = useState(true)
+
+  const trimmedInput = trimInput(debouncedInput)
+  const contentType = classify(trimmedInput)
+  const encodedContent = computeEncodedContent(
+    trimmedInput,
+    contentType,
+    schemeAutoAddEnabled,
+  )
+  const isEmpty = trimmedInput === ''
+
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null)
+  const [qrError, setQrError] = useState(false)
+
+  useEffect(() => {
+    if (isEmpty) {
+      setQrDataUrl(null)
+      setQrError(false)
+      return
+    }
+
+    let cancelled = false
+    QRCode.toDataURL(encodedContent, { errorCorrectionLevel: 'M', margin: 1 })
+      .then((url) => {
+        if (!cancelled) {
+          setQrDataUrl(url)
+          setQrError(false)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setQrDataUrl(null)
+          setQrError(true)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [encodedContent, isEmpty])
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <section id="center">
+      <h1>QR Maker</h1>
+      <p>Paste a link or type some text to get an instant QR code.</p>
 
-      <div className="ticks"></div>
+      <div className="input-row">
+        <input
+          type="text"
+          value={rawInput}
+          onChange={(event) => setRawInput(event.target.value)}
+          placeholder="https://example.com or any text"
+          aria-label="Content to encode"
+        />
+        <label className="scheme-toggle">
+          <input
+            type="checkbox"
+            checked={schemeAutoAddEnabled}
+            onChange={(event) => setSchemeAutoAddEnabled(event.target.checked)}
+          />
+          Auto-add https://
+        </label>
+      </div>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+      <div className="preview">
+        {isEmpty ? (
+          <div className="empty-state">Enter a link or text to see your QR code</div>
+        ) : qrError ? (
+          <div className="error-state">Couldn't generate a QR code for this content.</div>
+        ) : (
+          <>
+            {qrDataUrl && <img src={qrDataUrl} alt="Generated QR code" width={220} height={220} />}
+            <div className="meta">
+              <span className="content-type">{contentType}</span>
+              {isClickableLink(contentType, encodedContent) ? (
+                <a href={encodedContent} target="_blank" rel="noopener noreferrer">
+                  {encodedContent}
+                </a>
+              ) : (
+                <span className="content-text">{encodedContent}</span>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </section>
   )
 }
 

@@ -1,1 +1,1 @@
-
+- [qrMaker project scope](project_qrmaker_scope.md) — client-side QR maker goal, persona, and key scope decisions (toggleable cleanup, use-case-aware error correction, separate Manage Designs activity, template-sharing size constraint)
