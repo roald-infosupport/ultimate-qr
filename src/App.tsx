@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import QRCode from 'qrcode'
 import {
   classify,
@@ -12,7 +12,11 @@ import {
   TRACKING_PARAMETER_CATALOG,
 } from './lib/trackingParams'
 import { resolveLocalWrapper, resolveViaNetwork } from './lib/followLink'
-import { computeCapacityStatus, truncateToCapacity } from './lib/capacity'
+import {
+  computeCapacityStatus,
+  truncateToCapacity,
+  type ErrorCorrectionLevel,
+} from './lib/capacity'
 import {
   checkRawFileSize,
   processUploadedFile,
@@ -21,6 +25,18 @@ import {
   type UploadedFile,
 } from './lib/fileUpload'
 import { computeScannabilityRisk } from './lib/scannabilityRisk'
+import {
+  checkRawLogoFileSize,
+  clampLogoPosition,
+  clampLogoSizePercent,
+  computeLogoCoveragePercent,
+  DEFAULT_BACKING_PLATE_COLOR,
+  DEFAULT_LOGO_POSITION,
+  DEFAULT_LOGO_SIZE_PERCENT,
+  MAX_LOGO_SIZE_PERCENT,
+  processUploadedLogo,
+  type LogoConfiguration,
+} from './lib/logoConfig'
 import './App.css'
 
 const DEBOUNCE_MS = 150
@@ -28,6 +44,20 @@ const UPDATING_INDICATOR_THRESHOLD_MS = 300
 const MIN_ZOOM = 1
 const MAX_ZOOM = 3
 const ZOOM_STEP = 0.5
+const QR_FRAME_SIZE = 220
+
+const EMPTY_LOGO_CONFIG: LogoConfiguration = {
+  isActive: false,
+  fileName: null,
+  extension: null,
+  mimeType: null,
+  imageData: null,
+  sizePercent: null,
+  backingPlateColor: null,
+  positionPercent: DEFAULT_LOGO_POSITION,
+  errorCorrectionLevelBeforeLogo: null,
+  ecLevelAutoSet: false,
+}
 const FOLLOW_LINK_FAILURE_MESSAGE =
   "Couldn't verify this link's destination. It may be a shortener that blocks cross-origin checks, or the link may already be direct."
 
@@ -69,14 +99,34 @@ function App() {
   const [isProcessingUpload, setIsProcessingUpload] = useState(false)
   const [inputWasTruncated, setInputWasTruncated] = useState(false)
 
+  const [errorCorrectionLevel, setErrorCorrectionLevel] = useState<ErrorCorrectionLevel>('M')
+
+  const [logoConfig, setLogoConfig] = useState<LogoConfiguration>(EMPTY_LOGO_CONFIG)
+  const [logoMessage, setLogoMessage] = useState<string | null>(null)
+  const [isDraggingLogoFile, setIsDraggingLogoFile] = useState(false)
+  const [isProcessingLogo, setIsProcessingLogo] = useState(false)
+  const [isRepositioningLogo, setIsRepositioningLogo] = useState(false)
+  const [rawLogoSizePercent, setRawLogoSizePercent] = useState(DEFAULT_LOGO_SIZE_PERCENT)
+  const [committedLogoSizePercent, setCommittedLogoSizePercent] = useState(
+    DEFAULT_LOGO_SIZE_PERCENT,
+  )
+
   useEffect(() => {
     const timer = setTimeout(() => {
-      const truncated = truncateToCapacity(rawInput, 'M')
+      const truncated = truncateToCapacity(rawInput, errorCorrectionLevel)
       setCommittedInput(truncated)
       setInputWasTruncated(truncated.length < rawInput.length)
     }, DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [rawInput])
+  }, [rawInput, errorCorrectionLevel])
+
+  useEffect(() => {
+    const timer = setTimeout(
+      () => setCommittedLogoSizePercent(clampLogoSizePercent(rawLogoSizePercent)),
+      DEBOUNCE_MS,
+    )
+    return () => clearTimeout(timer)
+  }, [rawLogoSizePercent])
 
   function handleRawInputChange(value: string) {
     setRawInput(value)
@@ -104,7 +154,7 @@ function App() {
     setIsProcessingUpload(true)
     try {
       const bytes = await readFileBytes(file)
-      const result = processUploadedFile(file.name, bytes, 'M')
+      const result = processUploadedFile(file.name, bytes, errorCorrectionLevel)
 
       if (result.outcome === 'accepted') {
         // Uploading a file replaces any typed input (mutually exclusive
@@ -138,6 +188,89 @@ function App() {
     }))
   }
 
+  async function handleLogoSelected(file: File) {
+    if (isProcessingLogo) return
+
+    const sizeCheck = checkRawLogoFileSize(file)
+    if (!sizeCheck.ok) {
+      setLogoMessage(sizeCheck.message)
+      return
+    }
+
+    setIsProcessingLogo(true)
+    try {
+      const bytes = await readFileBytes(file)
+      const result = processUploadedLogo(file.name, bytes)
+
+      if (result.outcome === 'accepted') {
+        const alreadyActive = logoConfig.isActive
+        setLogoMessage(null)
+        setRawLogoSizePercent(DEFAULT_LOGO_SIZE_PERCENT)
+        setCommittedLogoSizePercent(DEFAULT_LOGO_SIZE_PERCENT)
+        setLogoConfig({
+          isActive: true,
+          fileName: file.name,
+          extension: result.extension,
+          mimeType: result.mimeType,
+          imageData: result.imageData,
+          sizePercent: DEFAULT_LOGO_SIZE_PERCENT,
+          backingPlateColor: DEFAULT_BACKING_PLATE_COLOR,
+          positionPercent: DEFAULT_LOGO_POSITION,
+          errorCorrectionLevelBeforeLogo: alreadyActive
+            ? logoConfig.errorCorrectionLevelBeforeLogo
+            : errorCorrectionLevel,
+          ecLevelAutoSet: alreadyActive ? logoConfig.ecLevelAutoSet : true,
+        })
+        if (!alreadyActive) setErrorCorrectionLevel('Q')
+      } else {
+        setLogoMessage(result.message)
+      }
+    } finally {
+      setIsProcessingLogo(false)
+    }
+  }
+
+  function handleLogoSizeChange(value: number) {
+    setRawLogoSizePercent(clampLogoSizePercent(value))
+  }
+
+  function handleRemoveLogo() {
+    if (logoConfig.ecLevelAutoSet && logoConfig.errorCorrectionLevelBeforeLogo) {
+      setErrorCorrectionLevel(logoConfig.errorCorrectionLevelBeforeLogo)
+    }
+    setLogoConfig(EMPTY_LOGO_CONFIG)
+    setLogoMessage(null)
+    setRawLogoSizePercent(DEFAULT_LOGO_SIZE_PERCENT)
+    setCommittedLogoSizePercent(DEFAULT_LOGO_SIZE_PERCENT)
+  }
+
+  function handleLogoImageError() {
+    handleRemoveLogo()
+    setLogoMessage(
+      "This image couldn't be displayed (the file may be corrupted). The logo has been removed.",
+    )
+  }
+
+  function handleLogoDragStart(event: ReactPointerEvent<HTMLDivElement>) {
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setIsRepositioningLogo(true)
+  }
+
+  function handleLogoDragMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!isRepositioningLogo || logoConfig.sizePercent === null) return
+    const frame = event.currentTarget.parentElement?.getBoundingClientRect()
+    if (!frame) return
+
+    const xPercent = ((event.clientX - frame.left) / frame.width) * 100
+    const yPercent = ((event.clientY - frame.top) / frame.height) * 100
+    const clamped = clampLogoPosition(xPercent, yPercent, logoConfig.sizePercent)
+    setLogoConfig((current) => ({ ...current, positionPercent: clamped }))
+  }
+
+  function handleLogoDragEnd() {
+    setIsRepositioningLogo(false)
+  }
+
   const hasUploadedFile = uploadedFile !== null
   const trimmedInput = trimInput(committedInput)
   const typedContentType = classify(trimmedInput)
@@ -152,7 +285,7 @@ function App() {
     ? toDataUri(uploadedFile.mimeType, uploadedFile.finalBytes)
     : typedEncodedContent
   const isEmpty = !hasUploadedFile && trimmedInput === ''
-  const capacityStatus = computeCapacityStatus(encodedContent, 'M')
+  const capacityStatus = computeCapacityStatus(encodedContent, errorCorrectionLevel)
 
   async function handleFollowLink() {
     if (isResolvingFollowLink) return
@@ -196,10 +329,13 @@ function App() {
   const [isUpdating, setIsUpdating] = useState(false)
   const [zoomLevel, setZoomLevel] = useState(1)
 
-  // Scaffold for stories 005/006: both inputs stay null until logo/color
-  // design parameters exist, so this never triggers today (degrades
-  // gracefully per spec 004 section 5.4).
-  const scannabilityRisk = computeScannabilityRisk(null, null)
+  // Scaffold for story 006: contrast ratio stays null until color design
+  // parameters exist (degrades gracefully per spec 004 section 5.4). Story
+  // 005's logo coverage is now wired in below.
+  const logoCoveragePercent = logoConfig.isActive
+    ? computeLogoCoveragePercent(committedLogoSizePercent)
+    : null
+  const scannabilityRisk = computeScannabilityRisk(null, logoCoveragePercent)
   const [dismissedRiskFactors, setDismissedRiskFactors] = useState<string | null>(null)
   const scannabilityWarningDismissed =
     dismissedRiskFactors === scannabilityRisk.riskFactors.join(',')
@@ -218,7 +354,7 @@ function App() {
       if (!cancelled) setIsUpdating(true)
     }, UPDATING_INDICATOR_THRESHOLD_MS)
 
-    QRCode.toDataURL(encodedContent, { errorCorrectionLevel: 'M', margin: 1 })
+    QRCode.toDataURL(encodedContent, { errorCorrectionLevel, margin: 1 })
       .then((url) => {
         if (!cancelled) {
           setQrDataUrl(url)
@@ -248,7 +384,7 @@ function App() {
       cancelled = true
       clearTimeout(indicatorTimer)
     }
-  }, [encodedContent, isEmpty])
+  }, [encodedContent, isEmpty, errorCorrectionLevel])
 
   return (
     <section id="center">
@@ -304,6 +440,53 @@ function App() {
           <p className={uploadMessageKind === 'error' ? 'upload-error' : 'upload-info'}>
             {uploadMessage}
           </p>
+        )}
+      </div>
+
+      <div
+        className={`upload-row logo-upload-row${isDraggingLogoFile ? ' upload-row--dragging' : ''}`}
+        onDragOver={(event) => {
+          event.preventDefault()
+          setIsDraggingLogoFile(true)
+        }}
+        onDragLeave={() => setIsDraggingLogoFile(false)}
+        onDrop={(event) => {
+          event.preventDefault()
+          setIsDraggingLogoFile(false)
+          const file = event.dataTransfer.files[0]
+          if (file) handleLogoSelected(file)
+        }}
+      >
+        <input
+          type="file"
+          accept=".png,.jpg,.jpeg,.svg"
+          aria-label="Upload a logo to overlay on the QR code"
+          disabled={isProcessingLogo}
+          onChange={(event) => {
+            const file = event.target.files?.[0]
+            if (file) handleLogoSelected(file)
+            event.target.value = ''
+          }}
+        />
+        <p className="upload-hint">or drag and drop a .png, .jpg, or .svg logo</p>
+        {logoMessage && <p className="upload-error">{logoMessage}</p>}
+        {logoConfig.isActive && (
+          <div className="logo-controls">
+            <label className="logo-size-label">
+              Logo size: {committedLogoSizePercent}%
+              <input
+                type="range"
+                min={1}
+                max={MAX_LOGO_SIZE_PERCENT}
+                value={rawLogoSizePercent}
+                onChange={(event) => handleLogoSizeChange(Number(event.target.value))}
+                aria-label="Logo size percentage"
+              />
+            </label>
+            <button type="button" className="remove-logo-button" onClick={handleRemoveLogo}>
+              Remove logo
+            </button>
+          </div>
         )}
       </div>
 
@@ -371,13 +554,51 @@ function App() {
             )}
             {qrDataUrl && (
               <div className="qr-zoom-frame">
-                <img
-                  src={qrDataUrl}
-                  alt="Generated QR code"
-                  width={220}
-                  height={220}
+                <div
+                  className="qr-zoom-scalable"
                   style={{ transform: `scale(${zoomLevel})` }}
-                />
+                >
+                  <img
+                    src={qrDataUrl}
+                    alt="Generated QR code"
+                    width={QR_FRAME_SIZE}
+                    height={QR_FRAME_SIZE}
+                  />
+                  {logoConfig.isActive &&
+                    logoConfig.imageData &&
+                    logoConfig.mimeType &&
+                    logoConfig.sizePercent !== null && (
+                      <div
+                        className="logo-backing-plate"
+                        onPointerDown={handleLogoDragStart}
+                        onPointerMove={handleLogoDragMove}
+                        onPointerUp={handleLogoDragEnd}
+                        onPointerCancel={handleLogoDragEnd}
+                        style={{
+                          width:
+                            (computeLogoCoveragePercent(committedLogoSizePercent) / 100) *
+                            QR_FRAME_SIZE,
+                          height:
+                            (computeLogoCoveragePercent(committedLogoSizePercent) / 100) *
+                            QR_FRAME_SIZE,
+                          left: `${logoConfig.positionPercent.x}%`,
+                          top: `${logoConfig.positionPercent.y}%`,
+                          backgroundColor: logoConfig.backingPlateColor ?? DEFAULT_BACKING_PLATE_COLOR,
+                        }}
+                      >
+                        <img
+                          className="logo-overlay-image"
+                          src={toDataUri(logoConfig.mimeType, logoConfig.imageData)}
+                          alt={`Logo: ${logoConfig.fileName}`}
+                          style={{
+                            width: (committedLogoSizePercent / 100) * QR_FRAME_SIZE,
+                            height: (committedLogoSizePercent / 100) * QR_FRAME_SIZE,
+                          }}
+                          onError={handleLogoImageError}
+                        />
+                      </div>
+                    )}
+                </div>
               </div>
             )}
             <div className="zoom-controls">
