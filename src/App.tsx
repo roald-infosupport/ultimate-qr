@@ -7,10 +7,8 @@ import {
   type ContentType,
 } from './lib/qrContent'
 import {
-  defaultTrackingToggles,
-  getPresentTrackingParamNames,
-  groupByCategory,
-  TRACKING_PARAMETER_CATALOG,
+  buildPresentParameterGroups,
+  resolveToggleState,
 } from './lib/trackingParams'
 import { resolveLocalWrapper, resolveViaNetwork } from './lib/followLink'
 import {
@@ -77,15 +75,13 @@ function isClickableLink(contentType: ContentType, content: string): boolean {
   return contentType === 'Link' && /^https?:\/\//i.test(content)
 }
 
-const TRACKING_PARAMETER_GROUPS = groupByCategory(TRACKING_PARAMETER_CATALOG)
-
 function App() {
   const [rawInput, setRawInput] = useState('')
   const [committedInput, setCommittedInput] = useState('')
   const [schemeAutoAddEnabled, setSchemeAutoAddEnabled] = useState(true)
   const [trackingToggles, setTrackingToggles] = useState<
     Record<string, boolean>
-  >(defaultTrackingToggles)
+  >({})
   const [followLinkState, setFollowLinkState] = useState<FollowLinkState>({
     outcome: 'notAttempted',
   })
@@ -213,7 +209,7 @@ function App() {
   function toggleTrackingParam(name: string) {
     setTrackingToggles((current) => ({
       ...current,
-      [name]: current[name] === false,
+      [name]: !resolveToggleState(name, current),
     }))
   }
 
@@ -321,18 +317,10 @@ function App() {
   const isEmpty = !hasUploadedFile && trimmedInput === ''
   const capacityStatus = computeCapacityStatus(encodedContent, errorCorrectionLevel)
 
-  const presentTrackingParamNames = getPresentTrackingParamNames(
+  const visibleTrackingParameterGroups = buildPresentParameterGroups(
     trimmedInput,
     typedContentType,
   )
-  const visibleTrackingParameterGroups = TRACKING_PARAMETER_GROUPS.map(
-    (group) => ({
-      category: group.category,
-      params: group.params.filter((param) =>
-        presentTrackingParamNames.has(param.name),
-      ),
-    }),
-  ).filter((group) => group.params.length > 0)
 
   async function handleFollowLink() {
     if (isResolvingFollowLink) return
@@ -547,7 +535,7 @@ function App() {
                 <label className="tracking-toggle" key={param.name}>
                   <input
                     type="checkbox"
-                    checked={trackingToggles[param.name] !== false}
+                    checked={resolveToggleState(param.name, trackingToggles)}
                     onChange={() => toggleTrackingParam(param.name)}
                   />
                   {param.name}

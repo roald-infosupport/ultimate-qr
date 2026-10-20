@@ -56,9 +56,31 @@ export function defaultTrackingToggles(): Record<string, boolean> {
   )
 }
 
-const TRACKING_PARAM_NAMES = new Set(
-  TRACKING_PARAMETER_CATALOG.map((rule) => rule.name),
+export const OTHER_CATEGORY = 'Other'
+
+const CATEGORY_BY_NAME = new Map(
+  TRACKING_PARAMETER_CATALOG.map((rule) => [rule.name, rule.category]),
 )
+
+export function isKnownTrackingParam(name: string): boolean {
+  return CATEGORY_BY_NAME.has(name)
+}
+
+export function categoryForParam(name: string): string {
+  return CATEGORY_BY_NAME.get(name) ?? OTHER_CATEGORY
+}
+
+/** Known tracking params are stripped by default; unrecognized params are kept by default. */
+export function defaultToggleState(name: string): boolean {
+  return isKnownTrackingParam(name)
+}
+
+export function resolveToggleState(
+  name: string,
+  toggles: Record<string, boolean>,
+): boolean {
+  return toggles[name] ?? defaultToggleState(name)
+}
 
 function parseQueryString(
   content: string,
@@ -77,20 +99,40 @@ function parseQueryString(
   return { base, params: new URLSearchParams(query), hash }
 }
 
-export function getPresentTrackingParamNames(
+/** Every query parameter currently present, known or not, in first-seen order. */
+export function getPresentParamNames(
   content: string,
   contentType: ContentType,
-): Set<string> {
-  if (contentType !== 'Link') return new Set()
+): string[] {
+  if (contentType !== 'Link') return []
 
   const parsed = parseQueryString(content)
-  if (!parsed) return new Set()
+  if (!parsed) return []
 
-  const present = new Set<string>()
-  for (const name of parsed.params.keys()) {
-    if (TRACKING_PARAM_NAMES.has(name)) present.add(name)
+  return [...new Set(parsed.params.keys())]
+}
+
+export function buildPresentParameterGroups(
+  content: string,
+  contentType: ContentType,
+): TrackingParameterGroup[] {
+  const groups: TrackingParameterGroup[] = []
+  for (const name of getPresentParamNames(content, contentType)) {
+    const category = categoryForParam(name)
+    let group = groups.find((g) => g.category === category)
+    if (!group) {
+      group = { category, params: [] }
+      groups.push(group)
+    }
+    group.params.push({ name, category })
   }
-  return present
+  // "Other" (unrecognized params) is shown last, after all known categories.
+  groups.sort((a, b) => {
+    if (a.category === OTHER_CATEGORY) return 1
+    if (b.category === OTHER_CATEGORY) return -1
+    return 0
+  })
+  return groups
 }
 
 export function stripTrackingParams(
@@ -105,7 +147,7 @@ export function stripTrackingParams(
   const { base, params, hash } = parsed
 
   for (const name of new Set(params.keys())) {
-    if (TRACKING_PARAM_NAMES.has(name) && toggles[name] !== false) {
+    if (resolveToggleState(name, toggles)) {
       params.delete(name)
     }
   }

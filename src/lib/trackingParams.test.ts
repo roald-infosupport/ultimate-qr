@@ -1,55 +1,94 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildPresentParameterGroups,
+  defaultToggleState,
   defaultTrackingToggles,
-  getPresentTrackingParamNames,
-  groupByCategory,
+  getPresentParamNames,
+  resolveToggleState,
   stripTrackingParams,
-  TRACKING_PARAMETER_CATALOG,
 } from './trackingParams'
 
-describe('getPresentTrackingParamNames', () => {
-  it('returns only known tracking params present in the query string', () => {
-    const present = getPresentTrackingParamNames(
-      'https://shop.example.com/menu?utm_source=newsletter',
+describe('getPresentParamNames', () => {
+  it('returns every query param present, known or not', () => {
+    const present = getPresentParamNames(
+      'https://shop.example.com/menu?table=12&utm_source=newsletter',
       'Link',
     )
-    expect([...present]).toEqual(['utm_source'])
+    expect(present).toEqual(['table', 'utm_source'])
   })
 
-  it('returns an empty set when no query string is present', () => {
-    const present = getPresentTrackingParamNames(
-      'https://shop.example.com/menu',
-      'Link',
-    )
-    expect(present.size).toBe(0)
+  it('returns an empty list when no query string is present', () => {
+    expect(
+      getPresentParamNames('https://shop.example.com/menu', 'Link'),
+    ).toEqual([])
   })
 
-  it('ignores query parameters not on the known catalog', () => {
-    const present = getPresentTrackingParamNames(
-      'https://shop.example.com/menu?ref=friend&utm_source=newsletter',
-      'Link',
-    )
-    expect([...present]).toEqual(['utm_source'])
-  })
-
-  it('returns an empty set for non-Link content', () => {
-    const present = getPresentTrackingParamNames(
-      'plain text with utm_source=foo in it',
-      'Text',
-    )
-    expect(present.size).toBe(0)
+  it('returns an empty list for non-Link content', () => {
+    expect(
+      getPresentParamNames('plain text with utm_source=foo in it', 'Text'),
+    ).toEqual([])
   })
 
   it('collapses duplicate keys to a single entry (EC-6)', () => {
-    const present = getPresentTrackingParamNames(
-      'https://shop.example.com/menu?utm_source=a&utm_source=b',
-      'Link',
-    )
-    expect([...present]).toEqual(['utm_source'])
+    expect(
+      getPresentParamNames(
+        'https://shop.example.com/menu?utm_source=a&utm_source=b',
+        'Link',
+      ),
+    ).toEqual(['utm_source'])
   })
 })
 
-describe('stripTrackingParams (unchanged behavior)', () => {
+describe('defaultToggleState', () => {
+  it('defaults known tracking params to stripped (true)', () => {
+    expect(defaultToggleState('utm_source')).toBe(true)
+  })
+
+  it('defaults unrecognized params to kept (false)', () => {
+    expect(defaultToggleState('table')).toBe(false)
+  })
+})
+
+describe('buildPresentParameterGroups', () => {
+  it('groups known params by category and unrecognized params under Other', () => {
+    const groups = buildPresentParameterGroups(
+      'https://shop.example.com/menu?table=12&utm_source=newsletter',
+      'Link',
+    )
+    expect(groups).toEqual([
+      { category: 'Generic UTM', params: [{ name: 'utm_source', category: 'Generic UTM' }] },
+      { category: 'Other', params: [{ name: 'table', category: 'Other' }] },
+    ])
+  })
+
+  it('returns nothing when no params are present', () => {
+    expect(
+      buildPresentParameterGroups('https://shop.example.com/menu', 'Link'),
+    ).toEqual([])
+  })
+
+  it('sorts Other after known categories regardless of appearance order', () => {
+    const groups = buildPresentParameterGroups(
+      'https://shop.example.com/menu?booth=3&utm_source=newsletter',
+      'Link',
+    )
+    expect(groups.map((g) => g.category)).toEqual(['Generic UTM', 'Other'])
+  })
+})
+
+describe('resolveToggleState', () => {
+  it('falls back to the kind default when no explicit toggle is set', () => {
+    expect(resolveToggleState('utm_source', {})).toBe(true)
+    expect(resolveToggleState('table', {})).toBe(false)
+  })
+
+  it('honors an explicit toggle over the default', () => {
+    expect(resolveToggleState('utm_source', { utm_source: false })).toBe(false)
+    expect(resolveToggleState('table', { table: true })).toBe(true)
+  })
+})
+
+describe('stripTrackingParams', () => {
   it('still strips known tracking params by default', () => {
     const result = stripTrackingParams(
       'https://shop.example.com/menu?utm_source=newsletter&ref=friend',
@@ -59,7 +98,7 @@ describe('stripTrackingParams (unchanged behavior)', () => {
     expect(result).toBe('https://shop.example.com/menu?ref=friend')
   })
 
-  it('keeps a param when its toggle is off', () => {
+  it('keeps a known param when its toggle is off', () => {
     const toggles = { ...defaultTrackingToggles(), utm_source: false }
     const result = stripTrackingParams(
       'https://shop.example.com/menu?utm_source=newsletter',
@@ -68,13 +107,22 @@ describe('stripTrackingParams (unchanged behavior)', () => {
     )
     expect(result).toBe('https://shop.example.com/menu?utm_source=newsletter')
   })
-})
 
-describe('groupByCategory', () => {
-  it('groups the full catalog by category', () => {
-    const groups = groupByCategory(TRACKING_PARAMETER_CATALOG)
-    const categories = groups.map((g) => g.category)
-    expect(categories).toContain('Generic UTM')
-    expect(categories).toContain('Facebook')
+  it('preserves an unrecognized param by default (SC-004)', () => {
+    const result = stripTrackingParams(
+      'https://shop.example.com/menu?table=12&utm_source=newsletter',
+      'Link',
+      {},
+    )
+    expect(result).toBe('https://shop.example.com/menu?table=12')
+  })
+
+  it('strips an unrecognized param when explicitly toggled on (SC-012b)', () => {
+    const result = stripTrackingParams(
+      'https://shop.example.com/menu?table=12',
+      'Link',
+      { table: true },
+    )
+    expect(result).toBe('https://shop.example.com/menu')
   })
 })

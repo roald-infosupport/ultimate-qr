@@ -32,11 +32,13 @@ When a user creates a QR code from a real-world link, that link often carries tr
 
 Additionally, the toggle list for controlling which parameters get stripped should only show parameters actually present in the entered link — showing toggles for every known parameter regardless of relevance clutters the UI with controls that do nothing, especially as the known-parameter catalog grows.
 
+Further, users sometimes want to strip a query parameter that isn't on the known tracking catalog at all — an internal reference code, a table/booth number, a session id added by their own site, etc. Restricting toggles to only the known catalog means the user has no way to remove those via the UI; they'd have to edit the raw link by hand, which defeats the purpose of a toggle-based cleanup UI.
+
 ### 1.2 Goal
 
 Building on story 001's `Link` classification, the user can strip known tracking parameters from a `Link` before it's encoded — each parameter individually toggleable, grouped by source/category in the UI (e.g. "Generic UTM," "Facebook," "Google Ads"), stripped by default. Separately, a single **Follow Link** action attempts to resolve the link's real destination: first by decoding known self-contained wrapper formats locally, then by a best-effort network redirect check for opaque shorteners. On success, the encoded content is instantly replaced with the resolved destination; on failure, the link is left unchanged with a clear explanation.
 
-The tracking-parameter toggle list recomputes live as the user edits the input, using the same debounce as QR regeneration, and shows only toggles for parameters currently present in the link's query string, grouped by category. A parameter's toggle state (on/off) is remembered per parameter name even while it's not present — if the user removes a param and later re-adds it (directly, or by pasting a different link), its previously-chosen toggle state is restored rather than reset to the stripped-by-default state.
+The tracking-parameter toggle list recomputes live as the user edits the input, using the same debounce as QR regeneration, and shows a toggle for every query parameter currently present in the link's query string — known tracking parameters grouped by category (e.g. "Generic UTM," "Facebook"), and any other, unrecognized parameter grouped under a catch-all "Other" category. Known tracking parameters are stripped by default; unrecognized parameters are kept by default, but the user can toggle either kind on or off. A parameter's toggle state (on/off) is remembered per parameter name even while it's not present — if the user removes a param and later re-adds it (directly, or by pasting a different link), its previously-chosen toggle state is restored rather than reset to the default for its kind.
 
 ### 1.3 Non-Goals
 
@@ -86,10 +88,11 @@ Use reasonable defaults for unspecified details. Mark genuine ambiguities with
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------| -------- | -------------- |
 | FR-001 | The system shall maintain a known list of tracking query parameters, grouped by source/category (e.g. Generic UTM, Facebook, Google Ads, Microsoft Ads, Mailchimp, Instagram). | Must | US-001, US-002 |
 | FR-002 | The system shall strip each known tracking parameter from a `Link`'s query string by default.                                           | Must     | US-001         |
-| FR-003 | The system shall show a toggle only for known tracking parameters currently present in the link's query string, grouped by category in the UI. | Must | US-002 |
-| FR-004 | The system shall preserve query parameters not on the known tracking list, regardless of toggle states.                                 | Must     | US-002         |
+| FR-003 | The system shall show a toggle for every query parameter currently present in the link's query string — known tracking parameters grouped by category, and unrecognized parameters grouped under a catch-all "Other" category. | Must | US-002 |
+| FR-004 | The system shall preserve a query parameter — known or unrecognized — unless the user has toggled it to be stripped. Unrecognized parameters default to kept (not stripped); known tracking parameters default to stripped, per FR-002. | Must | US-002 |
 | FR-010 | The system shall recompute the visible toggle list on input change, debounced identically to QR-code regeneration.                       | Must     | US-002         |
-| FR-011 | The system shall remember each tracking parameter's last-set toggle state for the duration of the session, and reapply it if that parameter reappears in the input, rather than resetting to the default (stripped). | Must | US-002 |
+| FR-011 | The system shall remember each parameter's (known or unrecognized) last-set toggle state for the duration of the session, and reapply it if that parameter reappears in the input, rather than resetting to its kind's default. | Must | US-002 |
+| FR-012 | The system shall allow toggling any currently-present query parameter, including ones not on the known tracking catalog, to be stripped or kept. | Must | US-002 |
 | FR-005 | The system shall provide a single "Follow Link" action, available for any `Link`-classified content.                                     | Must     | US-003         |
 | FR-006 | On activation, "Follow Link" shall first attempt to decode known self-contained wrapper formats (e.g. Facebook's `l.php?u=`) locally, without a network request. | Must | US-003 |
 | FR-007 | If no wrapper pattern matches, "Follow Link" shall attempt a best-effort network check to resolve the link via an HTTP redirect.          | Must     | US-003         |
@@ -115,6 +118,23 @@ Then parameters are grouped under category headings (e.g. "Generic UTM", "Facebo
 Given the user enters "https://shop.example.com/menu?utm_source=newsletter"
 Then only a toggle for "utm_source" is shown
   And no toggles for "utm_campaign", "fbclid", "gclid", or any other known parameter are shown
+```
+
+### SC-003b: Unrecognized parameters get a toggle too, grouped under "Other" (FR-003, FR-012)
+
+```gherkin
+Given the user enters "https://shop.example.com/menu?table=12&utm_source=newsletter"
+Then a toggle for "utm_source" is shown under "Generic UTM"
+  And a toggle for "table" is shown under an "Other" group
+```
+
+### SC-012b: Toggling an unrecognized parameter strips it (FR-004, FR-012)
+
+```gherkin
+Given the user enters "https://shop.example.com/menu?table=12"
+  And the user enables stripping for "table" (toggles it on)
+When the QR code is generated
+Then the encoded content is "https://shop.example.com/menu"
 ```
 
 ### SC-010: Toggle list recomputes live, debounced (FR-010)
@@ -143,6 +163,10 @@ Then the "utm_source" toggle reappears in the off (not-stripped) state, matching
 Given the user has never interacted with the "mc_cid" toggle before
 When "mc_cid" first appears in the link's query string
 Then its toggle shows the default state (stripped/on)
+
+Given the user has never interacted with the "table" toggle before, and "table" is not a known tracking parameter
+When "table" first appears in the link's query string
+Then its toggle shows the default state for an unrecognized parameter (kept/off)
 ```
 
 ### SC-002: Known tracking parameters are stripped by default (FR-002)
@@ -163,10 +187,11 @@ Then the encoded content is "https://shop.example.com/menu?utm_source=newsletter
   And "utm_campaign" remains stripped
 ```
 
-### SC-004: Unrecognized query parameters are always preserved (FR-004)
+### SC-004: Unrecognized query parameters are preserved by default (FR-004)
 
 ```gherkin
 Given the user enters "https://shop.example.com/menu?table=12&utm_source=newsletter"
+  And the user has not toggled "table"
 When the QR code is generated
 Then the encoded content is "https://shop.example.com/menu?table=12"
   And "utm_source" is stripped while "table" remains
@@ -231,6 +256,18 @@ A single known tracking query parameter and its current handling state.
 | enabled   | boolean | default `true` (stripped by default), session-scoped              | User-controlled toggle state; persists even while the parameter is absent from the current input (FR-011) |
 | present *(derived)* | boolean, not stored | computed from current input's query string | A toggle is rendered if and only if `present == true` (FR-003) |
 
+#### CustomParameterToggle
+
+A query parameter present in the current link that is *not* on the known tracking catalog, but that the user can still toggle to strip (FR-012).
+
+| Attribute | Type   | Constraints                                                       | Description                                    |
+| --------- | ------ | -------------------------------------------------------------------| ------------------------------------------------ |
+| name      | string | required, e.g. `"table"`                                          | Exact query parameter key, derived from the current input |
+| category  | string (fixed) | always `"Other"`                                            | Catch-all UI group for any parameter with no matching `TrackingParameterRule` |
+| enabled   | boolean | default `false` (kept by default), session-scoped                 | User-controlled toggle state; persists even while the parameter is absent from the current input (FR-011), same mechanics as `TrackingParameterRule.enabled` but opposite default |
+
+Both entities are rendered and toggled identically in the UI — the only distinction is which catalog defines the name (known vs. derived-from-input) and the default `enabled` value.
+
 ### 5.2 Relationships
 
 - `QrContent` (from spec 001) is extended by a set of **TrackingParameterRule** evaluations applied to its query string whenever `contentType == Link` — these run as part of deriving `encodedContent`, after trimming/scheme-handling and before the content is final.
@@ -251,11 +288,11 @@ Derived and transient — reflects only the most recent attempt; no persisted id
 ### 5.4 Domain Rules and Invariants
 
 - **Stripping is query-string-only**: tracking-parameter removal only ever touches the query string of `Link`-classified content; it never alters the path, hostname, or any `Text` content.
-- **Unknown-by-default**: a query parameter is removed if and only if its name matches an enabled `TrackingParameterRule`. A parameter with no matching rule is always preserved, regardless of any toggle state (FR-004).
+- **Toggle-driven removal**: a query parameter is removed if and only if its current toggle state is enabled — whether that toggle comes from a known `TrackingParameterRule` (default enabled) or a derived `CustomParameterToggle` for an unrecognized parameter (default disabled). There is no category of parameter that's unconditionally immune to removal; "preserved by default" just means its default toggle state is off (FR-004, FR-012).
 - **Fixed resolution order**: "Follow Link" always attempts local wrapper decoding first; the network-based check only runs if no wrapper pattern matched.
 - **Resolved destination re-enters the full pipeline**: on success, the resolved destination becomes the new `rawInput`, which is re-trimmed, re-classified, and has tracking-parameter stripping (per current toggle states) and scheme handling reapplied — so a resolved link that itself carries tracking params still gets cleaned, not just swapped in raw.
 - **Failure changes nothing**: if "Follow Link" fails, `encodedContent`, `rawInput`, and all toggle states remain exactly as they were before the click — only `FollowLinkResult.failureMessage` is set, to surface the explanation.
-- **Rules persist session-wide across the full known catalog, not just the currently-visible ones**: every known parameter has a session-held `enabled` state from the moment the session starts (defaulting to `true`), whether or not it's ever appeared in the input yet; only the UI rendering is filtered by `present`.
+- **Rules persist session-wide, independent of current visibility**: every parameter name's `enabled` state is well-defined for the whole session — its kind's default (`true` for a known `TrackingParameterRule`, `false` for a `CustomParameterToggle`) until the user explicitly toggles it, after which the explicit value is remembered regardless of whether the parameter is currently present; only the UI rendering is filtered by `present`.
 
 ## 6. Non-Functional Requirements
 
@@ -280,9 +317,10 @@ Writing these out prevents the AI from generating only the happy path._
 | EC-1 | The resolved destination is itself another wrapper or shortener (chained/nested)                 | Follow Link resolves only one layer per click; the user can click it again on the newly revealed content to resolve further layers. No automatic recursive resolution. |
 | EC-2 | The target server has a redirect loop or excessively long redirect chain                         | The browser's built-in redirect limit causes the fetch to fail; treated as a standard Follow Link failure (FR-009).                  |
 | EC-3 | The resolved destination is malformed or not a valid `Link` (e.g. an unusual scheme)             | Treated as a failure (FR-009) — original content stays unchanged rather than replacing it with something invalid.                   |
-| EC-4 | A tracking parameter exists that isn't yet in the known list (new/unrecognized ad platform)       | Preserved automatically, per FR-004 — no different from any other unrecognized parameter.                                           |
+| EC-4 | A tracking parameter exists that isn't yet in the known list (new/unrecognized ad platform)       | Shown as a toggle under "Other", kept by default (FR-004, FR-012) — same handling as any other unrecognized parameter, e.g. `table`. |
 | EC-5 | Parameter flashes present then removed before the debounce fires (fast typing)                    | No toggle is rendered for it — the toggle list only reflects the debounced/settled input, consistent with FR-010.                    |
 | EC-6 | Same parameter name appears twice in the query string (duplicate key)                             | Single toggle controls both instances; both are stripped or both kept together.                                                     |
+| EC-7 | Two distinct unrecognized parameters in the same link (e.g. `table` and `booth`)                   | Each gets its own toggle under "Other", independently toggleable, each defaulting to kept.                                           |
 
 ## 8. Success Criteria
 
@@ -291,10 +329,11 @@ These should be technology-agnostic._
 
 | ID     | Criterion                                                                                                              |
 | ------ | --------------------------------------------------------------------------------------------------------------------------|
-| SC-001 | All acceptance scenarios in Section 4 (SC-001–SC-012, including SC-003a) pass in automated and/or manual testing.       |
+| SC-001 | All acceptance scenarios in Section 4 (SC-001–SC-012, including SC-003a, SC-003b, SC-012b) pass in automated and/or manual testing. |
 | SC-002 | Known tracking parameters across all listed categories are stripped by default from 100% of test links containing them, unless explicitly toggled off. |
 | SC-003 | Follow Link correctly resolves 100% of self-contained wrapper formats included in the known-pattern list without any network request. |
-| SC-004 | Users can identify, at a glance, which tracking parameters currently apply to their link and their toggle state, without seeing irrelevant toggles for parameters absent from the input. |
+| SC-004 | Users can identify, at a glance, every query parameter currently in their link and its toggle state — known or not — without seeing toggles for parameters absent from the input. |
+| SC-005 | Users can strip any query parameter present in their link, including ones not on the known tracking catalog, by toggling it on. |
 
 ## 9. Dependencies and Constraints
 
